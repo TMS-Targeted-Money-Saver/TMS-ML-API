@@ -1,77 +1,97 @@
-import flask
-import tensorflow as tf
+from flask import Flask, request, jsonify
 import numpy as np
-from tensorflow.keras.preprocessing.text import Tokenizer
-from tensorflow.keras.preprocessing.sequence import pad_sequences
+import tensorflow as tf
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import LabelEncoder
+import pandas as pd
 
-app = flask.Flask(__name__)
+app = Flask(__name__)
 
-# Load TFLite model
-def load_tflite_model(model_path):
-    interpreter = tf.lite.Interpreter(model_path=model_path)
-    interpreter.allocate_tensors()
-    return interpreter
+# Load the TensorFlow H5 model
+try:
+    model = tf.keras.models.load_model('model/model_user_category (2).h5')  # Path file model H5 Anda
+    print("Model loaded successfully!")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    exit()
 
-# Preprocess input
-def preprocess_input(text, tokenizer, max_len=5000):
-    sequences = tokenizer.texts_to_sequences([text])  # Tokenisasi teks
-    padded_sequences = pad_sequences(sequences, maxlen=max_len, padding='post')  # Padding ke panjang 5000
-    return np.array(padded_sequences, dtype=np.float32)  # Pastikan menjadi float32
+# Load dataset untuk fitting vectorizer
+try:
+    data = pd.read_csv('data/amazon.csv')  # Path file dataset Anda
+    print("Dataset loaded successfully!")
+except FileNotFoundError:
+    print("Error: File CSV tidak ditemukan. Pastikan path file benar.")
+    exit()
 
-# Daftar kategori sesuai dengan model
-CATEGORIES = {
-    0: "Sports",
-    1: "Technology",
-    2: "Health",
-    3: "Education"
-}
+# Gabungkan kolom jika semua kolom tersedia
+required_columns = ['product_name', 'category', 'about_product']
+if all(col in data.columns for col in required_columns):
+    data['combined_text'] = data['product_name'] + " " + data['category'] + " " + data['about_product']
+    if data['combined_text'].isnull().any():
+        print("Error: Null values detected in combined_text. Check your dataset.")
+        exit()
+else:
+    print(f"Error: Dataset is missing one or more required columns: {required_columns}")
+    exit()
 
-# Postprocess output
-def postprocess_output(output):
-    predicted_class = np.argmax(output)
-    predicted_category = CATEGORIES.get(predicted_class, "Unknown")
-    return {
-        "predicted_class": int(predicted_class),
-        "predicted_category": predicted_category
-    }
+# Prepare the vectorizer
+vectorizer = TfidfVectorizer(max_features=5000)
+try:
+    vectorizer.fit(data['combined_text'])
+    print("Vectorizer fitted successfully!")
+except Exception as e:
+    print(f"Error fitting vectorizer: {e}")
+    exit()
 
-# Load model TFLite
-MODEL_PATH = "./model/model_user_category.tflite"
-interpreter = load_tflite_model(MODEL_PATH)
+# Encode kategori menjadi label numerik
+try:
+    label_encoder = LabelEncoder()
+    data['category_encoded'] = label_encoder.fit_transform(data['category'])
+    print("Categories encoded successfully!")
+except Exception as e:
+    print(f"Error encoding categories: {e}")
+    exit()
 
-# Load tokenizer (tokenizer yang sesuai dengan model Anda)
-tokenizer = Tokenizer()
+# Prediction function
+def predict_category(text):
+    try:
+        # Preprocessing input using TfidfVectorizer
+        sample_vector = vectorizer.transform([text]).toarray()
 
-@app.route("/predict", methods=["POST"])
+        # Debugging: Log the sample vector
+        print(f"Input Text: {text}")
+        print(f"Vectorized Input: {sample_vector}")
+
+        # Perform prediction
+        prediction = model.predict(sample_vector)
+        predicted_index = int(np.argmax(prediction))  # Convert to Python int for JSON compatibility
+
+        # Debugging: Log the prediction probabilities
+        print(f"Prediction Probabilities: {prediction}")
+
+        # Dapatkan nama kategori dari indeks
+        predicted_category = label_encoder.inverse_transform([predicted_index])[0]
+        return predicted_category
+    except Exception as e:
+        return f"Error during prediction: {e}"
+
+# Flask API route
+@app.route('/predict', methods=['POST'])
 def predict():
     try:
-        # Ambil input dari request
-        data = flask.request.json
-        text_input = data.get("text", "")
+        data = request.json
+        text = data.get('text', '')
+        if not text:
+            return jsonify({'error': 'No text provided'}), 400
 
-        if not text_input:
-            return flask.jsonify({"error": "Input text is required."}), 400
+        category = predict_category(text)
+        if isinstance(category, str) and category.startswith("Error"):
+            return jsonify({'error': category}), 500
 
-        # Preprocessing
-        input_data = preprocess_input(text_input, tokenizer)
-        
-        # Set input tensor
-        input_index = interpreter.get_input_details()[0]['index']
-        interpreter.set_tensor(input_index, input_data)
-
-        # Run inference
-        interpreter.invoke()
-
-        # Get output tensor
-        output_index = interpreter.get_output_details()[0]['index']
-        output_data = interpreter.get_tensor(output_index)
-
-        # Postprocessing
-        result = postprocess_output(output_data)
-
-        return flask.jsonify(result), 200
+        return jsonify({'category': category})
     except Exception as e:
-        return flask.jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
-if __name__ == "__main__":
-    app.run(debug=True)
+# Run the Flask app
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0')
