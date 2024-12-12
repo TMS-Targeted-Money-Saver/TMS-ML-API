@@ -2,3 +2,4 @@ Flask
 Tensorflow
 Numpy
 Pandas
+scikit-learn
