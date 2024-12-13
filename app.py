@@ -4,8 +4,9 @@ import tensorflow as tf
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import LabelEncoder
 import pandas as pd
+import os
 
-app = Flask(__name__)
+app = Flask(_name_)
 
 # Load the TensorFlow H5 model
 try:
@@ -93,5 +94,7 @@ def predict():
         return jsonify({'error': str(e)}), 500
 
 # Run the Flask app
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+if _name_ == '_main_':
+    # Set port dynamically using the environment variable, default to 8080
+    port = int(os.environ.get("PORT", 8080))
+    app.run(debug=True, host='0.0.0.0', port=port)
